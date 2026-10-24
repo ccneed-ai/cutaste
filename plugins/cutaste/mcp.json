@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "cutaste": {
+      "command": "./scripts/launch.sh",
+      "args": [
+        "codex",
+        "mcp"
+      ],
+      "env": {
+        "CUTASTE_HOST": "codex"
+      },
+      "env_vars": [
+        "CUTASTE_NODE",
+        "CUTASTE_HOME",
+        "TASTE_HOME",
+        "CUTASTE_INSTALL_DIR",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR"
+      ],
+      "cwd": "."
+    }
+  }
+}

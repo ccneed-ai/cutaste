@@ -1,0 +1,29 @@
+{
+  "name": "cutaste",
+  "version": "0.2.0",
+  "description": "Cutaste 的本地题库、偏好与前端评测工具。安装插件即注册四个 Skill、MCP 与宿主 Hook，并在首次运行时自动准备固定版本的 npm CLI。",
+  "author": {
+    "name": "Validflow"
+  },
+  "homepage": "https://www.npmjs.com/package/cutaste",
+  "repository": "https://github.com/ccneed-ai/cutaste",
+  "extensions": {
+    "com.openai": {
+      "skills": "./skills/",
+      "mcpServers": "./mcp.json",
+      "hooks": "./hooks/codex.json",
+      "interface": {
+        "displayName": "Cutaste",
+        "shortDescription": "本地题库、偏好与前端评测",
+        "longDescription": "Cutaste 的本地题库、偏好与前端评测工具。安装插件即注册四个 Skill、MCP 与宿主 Hook，并在首次运行时自动准备固定版本的 npm CLI。",
+        "developerName": "Validflow",
+        "category": "Productivity",
+        "defaultPrompt": [
+          "打开 Cutaste 页面并查看状态",
+          "用我的题库评测前端产物",
+          "查看 Cutaste 评测报告"
+        ]
+      }
+    }
+  }
+}

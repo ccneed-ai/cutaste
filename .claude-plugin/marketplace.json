@@ -1,12 +1,15 @@
 {
   "name": "cutaste-install",
-  "description": "Cutaste 的公开安装引导，不含核心程序。",
-  "owner": { "name": "Validflow" },
+  "description": "Cutaste 正式插件：四个 Skill、MCP 与 Hook，一次安装，自动准备本地 CLI。",
+  "owner": {
+    "name": "Validflow"
+  },
   "plugins": [
     {
-      "name": "cutaste-install",
-      "source": "./plugins/cutaste-install",
-      "description": "由当前编程助手下载并安装 Cutaste，保留用户的目录与宿主配置。"
+      "name": "cutaste",
+      "source": "./plugins/cutaste",
+      "version": "0.2.0",
+      "description": "Cutaste 的本地题库、偏好与前端评测工具。安装插件即注册四个 Skill、MCP 与宿主 Hook，并在首次运行时自动准备固定版本的 npm CLI。"
     }
   ]
 }

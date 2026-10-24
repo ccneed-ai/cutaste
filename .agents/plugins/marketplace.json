@@ -1,11 +1,19 @@
 {
   "name": "cutaste-install",
-  "interface": { "displayName": "Cutaste 安装引导" },
+  "interface": {
+    "displayName": "Cutaste"
+  },
   "plugins": [
     {
-      "name": "cutaste-install",
-      "source": { "source": "local", "path": "./plugins/cutaste-install" },
-      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "name": "cutaste",
+      "source": {
+        "source": "local",
+        "path": "./plugins/cutaste"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Productivity"
     }
   ]
