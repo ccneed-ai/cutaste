@@ -1,0 +1,12 @@
+{
+  "name": "cutaste-install",
+  "description": "Cutaste 的公开安装引导，不含核心程序。",
+  "owner": { "name": "Validflow" },
+  "plugins": [
+    {
+      "name": "cutaste-install",
+      "source": "./plugins/cutaste-install",
+      "description": "由当前编程助手下载并安装 Cutaste，保留用户的目录与宿主配置。"
+    }
+  ]
+}

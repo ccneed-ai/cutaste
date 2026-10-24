@@ -1,0 +1,6 @@
+{
+  "name": "cutaste-install",
+  "version": "0.1.0",
+  "description": "安装 Cutaste 的轻量引导：检查环境，从 npm 下载正式程序，通过当前助手的插件管理器接入。",
+  "author": { "name": "Validflow" }
+}

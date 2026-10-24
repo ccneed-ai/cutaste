@@ -1,0 +1,16 @@
+{
+  "name": "cutaste-install",
+  "version": "0.1.0",
+  "description": "通过当前编程助手，从 npm 安装 Cutaste 并完成正式插件接入。",
+  "author": { "name": "Validflow" },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/install-cutaste",
+      "interface": {
+        "displayName": "Cutaste 安装引导",
+        "shortDescription": "安装 Cutaste 并打开本地管理页面",
+        "defaultPrompt": ["请安装 Cutaste，沿用我的助手配置，并给我管理页面链接。"]
+      }
+    }
+  }
+}
