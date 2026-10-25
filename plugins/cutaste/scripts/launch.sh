@@ -1,5 +1,5 @@
 #!/bin/sh
-# Public bootstrap only. All product behavior comes from the pinned npm package.
+# Public bootstrap only. Product behavior comes from the selected, verified npm package.
 set -eu
 cutaste_host=${1:-}
 case "$cutaste_host" in codex|claude-code) shift ;; *) printf '%s\n' 'Cutaste: expected host codex or claude-code.' >&2; exit 2 ;; esac

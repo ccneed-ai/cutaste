@@ -3,13 +3,15 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { background, delay, installationState, officialEnvironment, officialLauncher, preparationPath, report, sanitized, scripts, validPackage } from './runtime.mjs';
+import { background, ensureInstalled, delay, installationState, officialEnvironment, officialLauncher, preparationPath, report, sanitized, scripts, validPackage } from './runtime.mjs';
+
+import { acquireRuntime, selectInstalled } from './updates.mjs';
 
 export async function serve(config) {
   const publicTools = JSON.parse(await readFile(join(scripts, 'tools.json'), 'utf8'));
   const pending = new Map();
   const requestIds = new Map();
-  let sequence = 0, backend, initializeTimer, closed = false, clientInitialized = false, phase = 'preparing', failure;
+  let releaseRuntime, sequence = 0, backend, initializeTimer, closed = false, clientInitialized = false, phase = 'preparing', failure;
   let resolveClient;
   const clientReady = new Promise(resolve => { resolveClient = resolve; });
   let clientParams;
@@ -37,8 +39,8 @@ export async function serve(config) {
       const supported = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];
       const protocolVersion = supported.includes(clientParams.protocolVersion) ? clientParams.protocolVersion : '2025-06-18';
       clientParams = { ...clientParams, protocolVersion };
-      response(request.id, { protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'cutaste', version: '0.1.0' },
-        instructions: 'Cutaste prepares its pinned local runtime automatically. Tool calls report preparation until the official MCP is ready; this does not confirm that the local page has started.' });
+      response(request.id, { protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'cutaste', version: '0.2.2' },
+        instructions: 'Cutaste prepares its compatible local runtime automatically. Tool calls report preparation until the official MCP is ready; this does not confirm that the local page has started.' });
       resolveClient(); return;
     }
     if (request.method === 'ping') { if (request.id !== undefined) response(request.id, {}); return; }
@@ -55,7 +57,7 @@ export async function serve(config) {
     if (!publicTools.tools.some(tool => tool.name === request.params?.name)) { error(request.id, -32602, 'Unknown Cutaste tool.'); return; }
     if (phase !== 'runtime-ready') {
       response(request.id, { isError: true, content: [{ type: 'text', text: JSON.stringify({ status: phase,
-        package: 'cutaste@0.1.0', mcpReady: false, retryable: phase !== 'failed',
+        package: `cutaste@${config.version || '0.1.0'}`, mcpReady: false, retryable: phase !== 'failed',
         message: failure || (phase === 'initializing-runtime' ? 'The npm package is ready; automatic local setup is initializing the benchmark and local page.' : phase === 'starting-runtime' ? 'Automatic local setup finished; the official MCP is connecting.'
           : 'The local package is preparing automatically. The first download can take several minutes. No tool operation was executed; try again after preparation.') }) }] });
       return;
@@ -79,9 +81,10 @@ export async function serve(config) {
     let workerStopped = false, workerCode;
     worker.once('error', () => { workerStopped = true; workerCode = 1; });
     worker.once('close', code => { workerStopped = true; workerCode = code; });
-    report('Preparing cutaste@0.1.0 and its local setup in the background; MCP discovery is available now.');
+    report('Preparing Cutaste and its local setup in the background; MCP discovery is available now.');
     while (!closed && !workerStopped) {
-      if (await validPackage(config.packageRoot)) phase = 'initializing-runtime';
+      await selectInstalled(config);
+      if (await validPackage(config.packageRoot, config.version)) phase = 'initializing-runtime';
       else {
         const state = await installationState(config);
         if (state?.status === 'failed' && (Date.parse(state.updatedAt) >= started || Date.now() - Date.parse(state.updatedAt) < 60_000)) throw new Error(state.message);
@@ -98,6 +101,9 @@ export async function serve(config) {
     if (prepared.status === 'degraded') report(`Automatic setup is degraded: ${JSON.stringify(prepared.problems)}. The official MCP will report its actual available state.`);
     await clientReady;
     if (closed) return;
+    await ensureInstalled(config);
+    releaseRuntime = await acquireRuntime(config, 'mcp');
+    if (closed) { await releaseRuntime(); return; }
     phase = 'starting-runtime';
     backend = spawn('/bin/sh', [officialLauncher(config), 'mcp'], {
       stdio: ['pipe', 'pipe', 'pipe'], env: officialEnvironment(config),
@@ -105,7 +111,7 @@ export async function serve(config) {
     backend.stdin.on('error', () => {});
     const diagnostics = createInterface({ input: backend.stderr, crlfDelay: Infinity });
     diagnostics.on('line', line => process.stderr.write(sanitized(line) + '\n'));
-    backend.once('error', () => fail('The installed MCP runtime could not start.'));
+    backend.once('error', () => { void releaseRuntime?.(); fail('The installed MCP runtime could not start.'); });
     const output = createInterface({ input: backend.stdout, crlfDelay: Infinity });
     output.on('line', line => {
       let message;
@@ -122,7 +128,7 @@ export async function serve(config) {
         send({ ...message, id: original });
       } else send(message);
     });
-    backend.once('close', code => { if (!closed) fail(`The installed MCP stopped (exit ${code ?? 'signal'}). Reopen the plugin to reconnect.`); });
+    backend.once('close', code => { void releaseRuntime?.(); if (!closed) fail(`The installed MCP stopped (exit ${code ?? 'signal'}). Reopen the plugin to reconnect.`); });
     initializeTimer = setTimeout(() => { fail('The installed MCP did not initialize within 30 seconds. Reopen the plugin to reconnect.'); backend.kill('SIGTERM'); }, 30_000);
     backendSend({ jsonrpc: '2.0', id: 'cutaste-initialize', method: 'initialize', params: clientParams });
   } catch (error) { if (!closed) fail(error.message); }

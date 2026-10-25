@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,14 +37,34 @@ if(attempted) await appendFile(join(state,'browser-attempts.jsonl'), 'open\n');
 const host=args[args.indexOf('--host')+1];
 const result={status:process.env.FIXTURE_DEGRADED === '1'?'degraded':'ready', hosts:[...new Set([...(saved?.hosts||[]),host])],url:'http://127.0.0.1:43210/',opened,template:'ready',background:'waiting',problems:[]};
 await writeFile(savedFile,JSON.stringify(result));
+if(process.env.FIXTURE_DAEMON_PORT) await writeFile(join(state,'web.json'),JSON.stringify({pid:Number(process.env.FIXTURE_DAEMON_PID),port:Number(process.env.FIXTURE_DAEMON_PORT),control:'fixture-control',runtimeVersion:'0.1.0'}));
 if(process.env.FIXTURE_CRASH === '1') process.exit(1);
 process.stdout.write(JSON.stringify(result));
 `;
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'cutaste-first-page-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'data');
-  const env = {...process.env, HOME:join(root,'user'),CUTASTE_HOME:home,DISPLAY:':fixture',CI:'',SSH_CONNECTION:'',SSH_CLIENT:'',SSH_TTY:'',WAYLAND_DISPLAY:'',WSL_DISTRO_NAME:'',WSL_INTEROP:''};
+  const env = {...process.env, CUTASTE_AUTO_UPDATE:'0', HOME:join(root,'user'),CUTASTE_HOME:home,DISPLAY:':fixture',CI:'',SSH_CONNECTION:'',SSH_CLIENT:'',SSH_TTY:'',WAYLAND_DISPLAY:'',WSL_DISTRO_NAME:'',WSL_INTEROP:''};
+  let daemon;
+  async function stopDaemon() {
+    if (!daemon?.listening) return;
+    await new Promise((resolve,reject)=>daemon.close(error=>error?reject(error):resolve()));
+  }
+  async function startDaemon() {
+    daemon=createServer((req,res)=>{
+      req.resume();
+      if(req.method!=='POST'||req.url!=='/_ctl/ping'||req.headers['x-taste-control']!=='fixture-control') {
+        res.writeHead(404);res.end('{}');return;
+      }
+      res.writeHead(200,{'content-type':'application/json'});
+      res.end(JSON.stringify({ok:true,pid:process.pid,version:'0.1.0'}));
+    });
+    await new Promise((resolve,reject)=>{daemon.once('error',reject);daemon.listen(0,'127.0.0.1',resolve);});
+    env.FIXTURE_DAEMON_PORT=String(daemon.address().port);
+    env.FIXTURE_DAEMON_PID=String(process.pid);
+  }
+  await startDaemon();
+  t.after(async()=>{await stopDaemon();await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:50});});
   await mkdir(env.HOME, {recursive:true});
   async function config(host='codex', name='prefix') {
     const prefix=join(root,name), packageRoot=join(prefix,'node_modules/cutaste');
@@ -73,7 +94,7 @@ async function fixture(t) {
     return JSON.parse(result.stdout);
   }
   async function lines(name) { try {return (await readFile(join(home,'state',name),'utf8')).trim().split('\n').filter(Boolean);} catch(error){if(error.code==='ENOENT')return [];throw error;} }
-  return {root,home,env,config,run,lines};
+  return {root,home,env,config,run,lines,startDaemon,stopDaemon};
 }
 
 test('desktop detection excludes SSH/CI/headless and permits desktop or WSL browser',()=>{
@@ -92,6 +113,29 @@ test('fresh install opens once, repeated starts and the other host never reopen'
   await f.run(await f.config('claude-code','other-prefix'));
   assert.equal((await f.lines('browser-attempts.jsonl')).length,1);
   assert.equal((await f.lines('setup-calls.jsonl')).length,2);
+});
+
+test('saved ready status restarts a stopped local service without opening another browser tab',async t=>{
+  const f=await fixture(t),config=await f.config();
+  await f.run(config);
+  assert.equal((await f.lines('setup-calls.jsonl')).length,1);
+  const old=JSON.parse(await readFile(join(f.home,'state/web.json'),'utf8'));
+  await f.stopDaemon();
+  await f.startDaemon();
+  // The persisted ready record still points at the closed listener. setup must
+  // refresh it instead of trusting the historical installation result.
+  const stale=JSON.parse(await readFile(join(f.home,'state/web.json'),'utf8'));
+  assert.equal(stale.port,old.port);
+  const recovered=await f.run(config);
+  assert.equal(recovered.status,'ready');
+  assert.equal(recovered.opened,false);
+  assert.equal((await f.lines('setup-calls.jsonl')).length,2);
+  assert.ok(JSON.parse((await f.lines('setup-calls.jsonl'))[1]).includes('--no-open'));
+  const current=JSON.parse(await readFile(join(f.home,'state/web.json'),'utf8'));
+  assert.equal(current.port,Number(f.env.FIXTURE_DAEMON_PORT));
+  await f.run(config);
+  assert.equal((await f.lines('setup-calls.jsonl')).length,2,'the live replacement service does not need repeated setup');
+  assert.equal((await f.lines('browser-attempts.jsonl')).length,1);
 });
 
 test('concurrent hosts in different installation prefixes share the once-only claim',async t=>{

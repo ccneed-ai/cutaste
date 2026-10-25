@@ -8,8 +8,8 @@
     {
       "name": "cutaste",
       "source": "./plugins/cutaste",
-      "version": "0.2.1",
-      "description": "Cutaste 的本地题库、偏好与前端评测工具。安装插件即注册四个 Skill、MCP 与宿主 Hook，并在首次运行时自动准备固定版本的 npm CLI。"
+      "version": "0.2.2",
+      "description": "Cutaste 的本地题库、偏好与前端评测工具。安装插件即注册四个 Skill、MCP 与宿主 Hook，首次运行自动准备 npm CLI，并在后台检查兼容稳定版；运行中的任务保持原版本。"
     }
   ]
 }

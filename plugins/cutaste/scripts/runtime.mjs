@@ -1,4 +1,4 @@
-// Installation and transport plumbing only; the product stays in cutaste@0.1.0.
+// Installation and transport plumbing only; product behavior stays in the npm core.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { access, appendFile, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -34,7 +34,7 @@ export function sanitized(message) {
 export function report(message) { process.stderr.write(`Cutaste: ${sanitized(message)}\n`); }
 export async function record(config, status, message) {
   await mkdir(config.control, { recursive: true, mode: 0o700 });
-  const value = { version: VERSION, status, message: sanitized(message), updatedAt: new Date().toISOString() };
+  const value = { version: config.version || VERSION, status, message: sanitized(message), updatedAt: new Date().toISOString() };
   const temporary = join(config.control, `state-${process.pid}-${Date.now()}.tmp`);
   await writeFile(temporary, JSON.stringify(value) + '\n', { mode: 0o600 });
   await rename(temporary, join(config.control, 'state.json'));
@@ -44,10 +44,10 @@ export async function installationState(config) {
   try { return JSON.parse(await readFile(join(config.control, 'state.json'), 'utf8')); }
   catch { return undefined; }
 }
-export async function validPackage(root) {
+export async function validPackage(root, expectedVersion = VERSION) {
   try {
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-    if (pkg.name !== 'cutaste' || pkg.version !== VERSION) return false;
+    if (pkg.name !== 'cutaste' || pkg.version !== expectedVersion) return false;
     for (const host of ['codex', 'claude-code']) {
       const plugin = join(root, 'plugins', host, 'cutaste');
       const manifestBytes = await readFile(join(plugin, 'payload/manifest.json'));
@@ -67,7 +67,7 @@ export async function validPackage(root) {
 }
 export const officialLauncher = config => join(config.packageRoot, 'plugins', config.host, 'cutaste/scripts/launch.sh');
 export const officialEnvironment = config => ({ ...process.env, CUTASTE_NODE: process.execPath, CUTASTE_HOST: config.host });
-function dataHome() {
+export function dataHome() {
   let home = process.env.CUTASTE_HOME || process.env.TASTE_HOME || join(homedir(), '.cutaste');
   if (home === '~') home = homedir();
   else if (home.startsWith('~/')) home = join(homedir(), home.slice(2));
@@ -126,6 +126,9 @@ async function officialJson(config, args, timeout = 30_000) {
 }
 export async function prepareRuntime(config) {
   await ensureInstalled(config);
+  const { acquireRuntime, daemonMatches } = await import('./updates.mjs');
+  const releaseRuntime = await acquireRuntime(config, 'setup');
+  try {
   // Different hosts and installation prefixes still share the same data-directory lock.
   const home = dataHome();
   const lock = join(home, 'state', 'plugin-automatic-setup.lock');
@@ -150,14 +153,14 @@ export async function prepareRuntime(config) {
     catch { firstPage = { allowOpen: false, outcome: 'unavailable' }; }
     let { value } = await officialJson(config, ['setup', '--status', '--json']);
     const hosts = Array.isArray(value.hosts) ? value.hosts.map(host => typeof host === 'string' ? host : host?.host) : [];
-    if (value.status !== 'ready' || !hosts.includes(config.host) || firstPage.allowOpen) {
+    if (value.status !== 'ready' || !hosts.includes(config.host) || firstPage.allowOpen || !await daemonMatches(config)) {
       ({ value } = await officialJson(config, ['setup', '--host', config.host, ...(firstPage.allowOpen ? [] : ['--no-open']), '--json'], 180_000));
     }
     try { firstPage = await finishFirstPage(home, firstPage, value); } catch { /* Opening is best effort; it must never disable MCP or hooks. */ }
     if (!['ready', 'degraded'].includes(value.status)) throw new Error('Automatic local setup has not completed. Reopen the plugin to resume; no completed setup is being claimed.');
     const sanitizeValue = item => typeof item === 'string' ? sanitized(item) : Array.isArray(item) ? item.map(sanitizeValue)
       : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, sanitizeValue(entry)])) : item;
-    const summary = sanitizeValue({ status: value.status, template: value.template, url: value.url,
+    const summary = sanitizeValue({ status: value.status, runtimeVersion: config.version, template: value.template, url: value.url,
       opened: firstPage.allowOpen && value.opened === true, firstPage: firstPage.outcome, browser: value.browser, background: value.background, problems: value.problems || [], updatedAt: new Date().toISOString() });
     const destination = preparationPath(config), temporary = destination + `.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify(summary) + '\n', { mode: 0o600 });
@@ -166,9 +169,10 @@ export async function prepareRuntime(config) {
     if (summary.status === 'degraded') report(`Automatic local setup is degraded: ${JSON.stringify(summary.problems)}. The official MCP will report its actual available state.`);
     return summary;
   } finally { await rm(lock, { recursive: true, force: true }); }
+  } finally { await releaseRuntime(); }
 }
 
-async function npmExecutable() {
+export async function npmExecutable() {
   for (const directory of (process.env.PATH || '').split(delimiter)) {
     if (!directory) continue;
     const candidate = resolve(directory, 'npm');
@@ -181,12 +185,12 @@ async function npmExecutable() {
   }
   throw new Error('npm is unavailable in the assistant PATH. Install local Node.js with npm and restart the assistant.');
 }
-async function installInto(config, staging) {
+export async function installInto(config, staging, version = VERSION) {
   const npm = await npmExecutable();
-  await record(config, 'installing', `Downloading and verifying cutaste@${VERSION}; the first download can take several minutes.`);
+  if (!config.version) await record(config, 'installing', `Downloading and verifying cutaste@${version}; the first download can take several minutes.`);
   await new Promise((resolveInstall, reject) => {
     const child = spawn(npm.command, [...npm.args, 'install', '--prefix', staging, '--registry=https://registry.npmjs.org/',
-      '--ignore-scripts', '--no-audit', '--no-fund', '--no-save', '--package-lock=false', '--logs-max=0', `cutaste@${VERSION}`], {
+      '--ignore-scripts', '--no-audit', '--no-fund', '--no-save', '--package-lock=false', '--logs-max=0', `cutaste@${version}`], {
       // npm output can contain registry credentials. Never copy raw npm output to MCP, hooks or logs.
       stdio: 'ignore', detached: true, env: { ...process.env, npm_config_logs_max: '0' },
     });
@@ -204,7 +208,7 @@ async function installInto(config, staging) {
     });
   });
 }
-export async function ensureInstalled(config, { forceRetry = false } = {}) {
+async function ensurePinnedInstalled(config, { forceRetry = false } = {}) {
   if (await validPackage(config.packageRoot)) return config.packageRoot;
   await mkdir(config.control, { recursive: true, mode: 0o700 });
   const lock = join(config.control, 'install.lock');
@@ -260,6 +264,18 @@ export async function ensureInstalled(config, { forceRetry = false } = {}) {
   }
 }
 
+export async function ensureInstalled(config, options = {}) {
+  const { selectInstalled, managedCli, activatePending } = await import('./updates.mjs');
+  if (!await selectInstalled(config)) {
+    await ensurePinnedInstalled(config, options);
+    await selectInstalled(config);
+  }
+  // A staged update may become eligible between sessions without another registry call.
+  await activatePending(config).catch(() => {});
+  await managedCli(config);
+  return config.packageRoot;
+}
+
 export async function readHookInput(limit = 1024 * 1024) {
   const chunks = []; let bytes = 0;
   const timer = setTimeout(() => process.stdin.destroy(new Error('Hook input did not finish within 2 seconds; no partial event was forwarded.')), 2000);
@@ -283,7 +299,9 @@ export function background(config, args = [], input = Buffer.alloc(0)) {
   return child;
 }
 export async function runOfficial(config, args, input) {
-  return new Promise((resolveRun, reject) => {
+  const { acquireRuntime } = await import('./updates.mjs');
+  const releaseRuntime = await acquireRuntime(config, args[0] === 'mcp' ? 'mcp' : 'command');
+  try { return await new Promise((resolveRun, reject) => {
     const child = spawn('/bin/sh', [officialLauncher(config), ...args], {
       stdio: [input === undefined ? 'inherit' : 'pipe', 'inherit', 'inherit'], env: officialEnvironment(config),
     });
@@ -294,5 +312,5 @@ export async function runOfficial(config, args, input) {
     const cleanup = () => { process.off('SIGINT', sigint); process.off('SIGTERM', sigterm); };
     child.once('error', () => { cleanup(); reject(new Error('The installed Cutaste runtime could not start.')); });
     child.once('close', code => { cleanup(); resolveRun(code ?? 1); });
-  });
+  }); } finally { await releaseRuntime(); }
 }
