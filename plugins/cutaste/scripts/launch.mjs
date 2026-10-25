@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { background, configuration, ensureInstalled, prepareRuntime, readHookInput, record, report, runOfficial, validPackage } from './runtime.mjs';
+import { background, configuration, ensureInstalled, hasSetupRecord, prepareRuntime, readHookInput, record, report, runOfficial, validPackage } from './runtime.mjs';
 
 const [host, ...args] = process.argv.slice(2);
 let config;
@@ -19,7 +19,15 @@ try {
     await serve(config);
   } else if (args[0] === 'hook') {
     const input = await readHookInput();
-    if (await validPackage(config.packageRoot)) process.exitCode = await runOfficial(config, args, input);
+    if (args[1] === 'SessionStart' && !await hasSetupRecord()) {
+      // Preparation owns first-run browser opening. The bundled hook's older auto-setup
+      // must not initialize the directory first with --no-open when npm is already cached.
+      background(config, args, input);
+    } else if (await validPackage(config.packageRoot)) {
+      // Warm hooks must return their additionalContext to the host; only preparation detaches.
+      if (args[1] === 'SessionStart') background(config);
+      process.exitCode = await runOfficial(config, args, input);
+    }
     else {
       background(config, args, input);
       if (args[1] === 'SessionStart') report('Preparing the local npm package in the background; this session event will be delivered after preparation.');

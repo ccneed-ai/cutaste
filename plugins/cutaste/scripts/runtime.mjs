@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claimFirstPage, finishFirstPage } from './first-page.mjs';
 
 export const VERSION = '0.1.0';
 export const scripts = dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,10 @@ function dataHome() {
   else if (home.startsWith('~/')) home = join(homedir(), home.slice(2));
   return resolve(home);
 }
+export async function hasSetupRecord() {
+  try { return (await stat(join(dataHome(), 'state', 'plugin-setup.json'))).isFile(); }
+  catch { return false; }
+}
 export function preparationPath(config) {
   const key = createHash('sha256').update(dataHome() + '\0' + config.host).digest('hex');
   return join(config.control, `preparation-${key}.json`);
@@ -121,9 +126,10 @@ async function officialJson(config, args, timeout = 30_000) {
 }
 export async function prepareRuntime(config) {
   await ensureInstalled(config);
-  // Different assistants may initialize the same data directory together.
-  const key = createHash('sha256').update(dataHome()).digest('hex');
-  const lock = join(config.control, `setup-${key}.lock`);
+  // Different hosts and installation prefixes still share the same data-directory lock.
+  const home = dataHome();
+  const lock = join(home, 'state', 'plugin-automatic-setup.lock');
+  await mkdir(dirname(lock), { recursive: true, mode: 0o700 });
   await mkdir(config.control, { recursive: true, mode: 0o700 });
   const deadline = Date.now() + 4 * 60_000;
   for (;;) {
@@ -139,19 +145,24 @@ export async function prepareRuntime(config) {
     }
   }
   try {
+    let firstPage;
+    try { firstPage = await claimFirstPage(home, process.env); }
+    catch { firstPage = { allowOpen: false, outcome: 'unavailable' }; }
     let { value } = await officialJson(config, ['setup', '--status', '--json']);
     const hosts = Array.isArray(value.hosts) ? value.hosts.map(host => typeof host === 'string' ? host : host?.host) : [];
-    if (value.status !== 'ready' || !hosts.includes(config.host)) {
-      ({ value } = await officialJson(config, ['setup', '--host', config.host, '--no-open', '--json'], 180_000));
+    if (value.status !== 'ready' || !hosts.includes(config.host) || firstPage.allowOpen) {
+      ({ value } = await officialJson(config, ['setup', '--host', config.host, ...(firstPage.allowOpen ? [] : ['--no-open']), '--json'], 180_000));
     }
+    try { firstPage = await finishFirstPage(home, firstPage, value); } catch { /* Opening is best effort; it must never disable MCP or hooks. */ }
     if (!['ready', 'degraded'].includes(value.status)) throw new Error('Automatic local setup has not completed. Reopen the plugin to resume; no completed setup is being claimed.');
     const sanitizeValue = item => typeof item === 'string' ? sanitized(item) : Array.isArray(item) ? item.map(sanitizeValue)
       : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, sanitizeValue(entry)])) : item;
     const summary = sanitizeValue({ status: value.status, template: value.template, url: value.url,
-      opened: value.opened === true, browser: value.browser, background: value.background, problems: value.problems || [], updatedAt: new Date().toISOString() });
+      opened: firstPage.allowOpen && value.opened === true, firstPage: firstPage.outcome, browser: value.browser, background: value.background, problems: value.problems || [], updatedAt: new Date().toISOString() });
     const destination = preparationPath(config), temporary = destination + `.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify(summary) + '\n', { mode: 0o600 });
     await rename(temporary, destination);
+    if (firstPage.outcome !== 'already-recorded' && summary.url && !summary.opened) report(`Local page: ${summary.url}. Automatic browser opening was skipped or unavailable; open this address on this computer, or use the optional setup skill.`);
     if (summary.status === 'degraded') report(`Automatic local setup is degraded: ${JSON.stringify(summary.problems)}. The official MCP will report its actual available state.`);
     return summary;
   } finally { await rm(lock, { recursive: true, force: true }); }

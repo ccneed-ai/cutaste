@@ -36,8 +36,8 @@ Codex 如提示 Hooks 尚未信任，在 `/hooks` 中审阅并信任 Cutaste。�
 
 1. 助手加载插件时，注册 `setup`、`cutaste`、`evaluate`、`alignment` 四个 Skill，以及 MCP 和对应助手的 Hooks。
 2. MCP 启动或首次会话钩子运行时，自动从公开 npm 下载固定版本 `cutaste@0.1.0`。正式包约 125 MB，首次需要等待下载；有效安装会直接复用。
-3. 准备过程中，MCP 保持连接，并如实报告准备状态。后台自动初始化数据、导入 40 道初始题，并启动本地页面服务；不会擅自弹出浏览器。完成后接通正式工具，无需再运行安装 Skill。
-4. 之后直接对助手说“打开 Cutaste 管理页面”或描述要评测的方案。`setup` 保留为检查、打开页面和修复入口，不是必做的安装步骤。
+3. 准备过程中，MCP 保持连接，并如实报告准备状态。后台自动初始化数据、导入 40 道初始题，并启动本地页面服务。首次新安装在页面就绪后自动尝试打开默认浏览器一次；完成后接通正式工具，无需再运行安装 Skill。
+4. 页面自动打开后即可查看进度；之后直接描述要评测的方案。再次开会话、增加另一助手接入或升级已有安装，不会反复弹窗。SSH、CI 和无桌面环境不自动打开，状态中保留页面地址；打开失败也不阻塞助手，需要时可让助手使用 `setup` 打开或检查页面。`setup` 不是必做的安装步骤。
 
 添加 marketplace 只是添加插件来源，仍须选择并安装其中的 **Cutaste**。插件安装成功也不代表网络下载已经完成；缺 Node、下载失败或宿主需要授权时，会报告实际问题。
 
@@ -76,3 +76,7 @@ Skill 注册后由助手按任务使用，不会因为安装了插件就自动�
 这是 Cutaste 自己的插件市场，不代表已上架宿主的官方精选目录。
 
 官方安装机制：[Claude Code](https://code.claude.com/docs/en/discover-plugins)、[Codex 插件](https://learn.chatgpt.com/docs/plugins)、[Codex 市场与插件封装](https://developers.openai.com/plugins/build/plugins)。
+
+当前安装插件版本为 **0.2.1**，对应固定 npm 核心 **0.1.0**；两者版本分别管理。
+
+仓库内容见 [REPOSITORY.md](REPOSITORY.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
