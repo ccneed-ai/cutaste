@@ -8,14 +8,31 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claimFirstPage, finishFirstPage } from './first-page.mjs';
 
-export const VERSION = '0.1.0';
+// Exact bootstrap release for new installs. The published 0.1.0 Linux core
+// remains usable when it is already installed; it is never a Mac fallback.
+export const VERSION = '0.1.1';
+export const LEGACY_VERSION = '0.1.0';
 export const scripts = dirname(fileURLToPath(import.meta.url));
 export const delay = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms));
+export const supportedRuntime = (platform = process.platform, arch = process.arch) =>
+  platform === 'linux' && arch === 'x64' || platform === 'darwin' && ['arm64', 'x64'].includes(arch);
+export function packageMatchesPlatform(pkg, platform = process.platform, arch = process.arch) {
+  return supportedRuntime(platform, arch) && Array.isArray(pkg?.os) && pkg.os.includes(platform) && !pkg.os.includes(`!${platform}`)
+    && Array.isArray(pkg?.cpu) && pkg.cpu.includes(arch) && !pkg.cpu.includes(`!${arch}`)
+    && (pkg.supportedPlatforms === undefined || Array.isArray(pkg.supportedPlatforms) && pkg.supportedPlatforms.includes(`${platform}-${arch}`));
+}
+export function manifestMatchesPlatform(manifest, platform = process.platform, arch = process.arch) {
+  if (!supportedRuntime(platform, arch)) return false;
+  if (manifest?.platform === 'universal') return manifest.arch === 'universal'
+    && Array.isArray(manifest.supportedPlatforms) && manifest.supportedPlatforms.includes(`${platform}-${arch}`);
+  return manifest?.platform === platform && manifest.arch === arch
+    && (manifest.supportedPlatforms === undefined || Array.isArray(manifest.supportedPlatforms) && manifest.supportedPlatforms.includes(`${platform}-${arch}`));
+}
 export function configuration(host) {
   if (!['codex', 'claude-code'].includes(host)) throw new Error('Expected host codex or claude-code.');
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (!(major > 22 || major === 22 && minor >= 12)) throw new Error('Local Node.js >=22.12.0 is required.');
-  if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('cutaste@0.1.0 supports Linux x64 only.');
+  if (!supportedRuntime()) throw new Error(`Cutaste does not support ${process.platform}-${process.arch}. The launcher supports Linux x64 and macOS arm64/x64 with a matching runtime package.`);
   let prefix = process.env.CUTASTE_INSTALL_DIR || join(homedir(), '.local/share/cutaste');
   if (prefix === '~') prefix = homedir();
   else if (prefix.startsWith('~/')) prefix = join(homedir(), prefix.slice(2));
@@ -47,14 +64,20 @@ export async function installationState(config) {
 export async function validPackage(root, expectedVersion = VERSION) {
   try {
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-    if (pkg.name !== 'cutaste' || pkg.version !== expectedVersion) return false;
+    if (pkg.name !== 'cutaste' || pkg.version !== expectedVersion || !packageMatchesPlatform(pkg)) return false;
     for (const host of ['codex', 'claude-code']) {
       const plugin = join(root, 'plugins', host, 'cutaste');
       const manifestBytes = await readFile(join(plugin, 'payload/manifest.json'));
       const manifest = JSON.parse(manifestBytes);
       const supported = JSON.parse(await readFile(join(plugin, 'supported-platform.json'), 'utf8'));
-      if (manifest.runtimeKind !== 'local-node' || manifest.platform !== 'linux' || manifest.arch !== 'x64'
+      const universal = manifest.platform === 'universal';
+      if (manifest.runtimeKind !== 'local-node' || !manifestMatchesPlatform(manifest)
         || manifest.requiresPreinstalledNode !== true || manifest.nodeBundled !== false || manifest.channel !== 'stable'
+        || supported.supportedPlatform !== (universal ? 'universal' : `${process.platform}-${process.arch}`) || supported.host !== host
+        || universal && (!Array.isArray(pkg.supportedPlatforms) || !Array.isArray(supported.supportedPlatforms)
+          || JSON.stringify([...manifest.supportedPlatforms].sort()) !== JSON.stringify([...supported.supportedPlatforms].sort())
+          || JSON.stringify([...manifest.supportedPlatforms].sort()) !== JSON.stringify([...pkg.supportedPlatforms].sort()))
+        || !universal && supported.supportedPlatforms !== undefined && (!Array.isArray(supported.supportedPlatforms) || !supported.supportedPlatforms.includes(`${process.platform}-${process.arch}`))
         || supported.coreManifestSha256 !== createHash('sha256').update(manifestBytes).digest('hex')) return false;
       for (const name of ['scripts/launch.sh', 'scripts/select-core.mjs', 'prepare-offline.mjs', 'payload/runtime/cutaste.mjs',
         'payload/vendor/axe.min.js', 'payload/vendor/browser/node_modules/playwright/index.mjs', 'offline/base-template/manifest.json', 'offline/fontpack/manifest.json']) {
@@ -203,7 +226,7 @@ export async function installInto(config, staging, version = VERSION) {
     child.once('close', code => {
       clearTimeout(timer);
       if (timedOut) reject(new Error('npm installation exceeded 10 minutes. Check network access; reopening the plugin retries automatically.'));
-      else if (code !== 0) reject(new Error(`npm installation failed (exit ${code ?? 'unknown'}). Check network access and npm credentials; reopening the plugin retries automatically.`));
+      else if (code !== 0) reject(new Error(`npm installation of cutaste@${version} failed (exit ${code ?? 'unknown'}). Check whether this candidate has been published, network access and npm credentials; reopening the plugin retries automatically.`));
       else resolveInstall();
     });
   });
@@ -239,7 +262,9 @@ async function ensurePinnedInstalled(config, { forceRetry = false } = {}) {
     staging = await mkdtemp(join(config.control, 'staging-'));
     await installInto(config, staging);
     const candidate = join(staging, 'node_modules/cutaste');
-    if (!await validPackage(candidate)) throw new Error('The downloaded package is incomplete or does not match cutaste@0.1.0 Linux x64.');
+    if (!await validPackage(candidate)) throw new Error(`The downloaded package is incomplete or does not match cutaste@${VERSION} on ${process.platform}-${process.arch}. No incompatible fallback was installed.`);
+    const { verifyCandidate } = await import('./updates.mjs');
+    await verifyCandidate(config, candidate, VERSION);
     await mkdir(dirname(config.packageRoot), { recursive: true });
     let previous;
     try {
@@ -268,7 +293,7 @@ export async function ensureInstalled(config, options = {}) {
   const { selectInstalled, managedCli, activatePending } = await import('./updates.mjs');
   if (!await selectInstalled(config)) {
     await ensurePinnedInstalled(config, options);
-    await selectInstalled(config);
+    if (!await selectInstalled(config)) throw new Error('The installed Cutaste baseline has no compatible runtime contract. No runtime was selected.');
   }
   // A staged update may become eligible between sessions without another registry call.
   await activatePending(config).catch(() => {});

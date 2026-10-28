@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { background, ensureInstalled, delay, installationState, officialEnvironment, officialLauncher, preparationPath, report, sanitized, scripts, validPackage } from './runtime.mjs';
+import { VERSION, background, ensureInstalled, delay, installationState, officialEnvironment, officialLauncher, preparationPath, report, sanitized, scripts, validPackage } from './runtime.mjs';
 
 import { acquireRuntime, selectInstalled } from './updates.mjs';
 
@@ -57,7 +57,7 @@ export async function serve(config) {
     if (!publicTools.tools.some(tool => tool.name === request.params?.name)) { error(request.id, -32602, 'Unknown Cutaste tool.'); return; }
     if (phase !== 'runtime-ready') {
       response(request.id, { isError: true, content: [{ type: 'text', text: JSON.stringify({ status: phase,
-        package: `cutaste@${config.version || '0.1.0'}`, mcpReady: false, retryable: phase !== 'failed',
+        package: `cutaste@${config.version || VERSION}`, mcpReady: false, retryable: phase !== 'failed',
         message: failure || (phase === 'initializing-runtime' ? 'The npm package is ready; automatic local setup is initializing the benchmark and local page.' : phase === 'starting-runtime' ? 'Automatic local setup finished; the official MCP is connecting.'
           : 'The local package is preparing automatically. The first download can take several minutes. No tool operation was executed; try again after preparation.') }) }] });
       return;

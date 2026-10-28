@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm, readdir, stat, mkdtemp, chmod, symlink, lstat } from 'node:fs/promises';
 import { request } from 'node:http';
 import { dirname, join, isAbsolute } from 'node:path';
-import { VERSION, dataHome, delay, validPackage, npmExecutable, installInto, scripts, sanitized } from './runtime.mjs';
+import { LEGACY_VERSION, dataHome, delay, validPackage, packageMatchesPlatform, npmExecutable, installInto, scripts, sanitized } from './runtime.mjs';
 
 export const COMPATIBILITY = Object.freeze({ launcherProtocol: 1, dataSchema: 1, mcpContract: 1 });
 const DAY = 24 * 60 * 60_000;
@@ -72,12 +72,12 @@ async function acceptable(record) {
   if (!record || !stableVersion(record.version) || !isAbsolute(record.packageRoot || '')) return false;
   if (!await validPackage(record.packageRoot, record.version)) return false;
   const pkg = await metadata(record.packageRoot);
-  return compatible(pkg.cutasteUpdate) || record.version === VERSION && !pkg.cutasteUpdate;
+  return compatible(pkg.cutasteUpdate) || record.version === LEGACY_VERSION && !pkg.cutasteUpdate;
 }
 const apply = (config, record) => { config.packageRoot = record.packageRoot; config.version = record.version; return record.packageRoot; };
 const updater = config => ({ updaterEntry: join(scripts, 'launch.mjs'), updaterHost: config.host, updaterVersion: '0.2.2', updaterProtocol: 1 });
 
-/** Pick the data directory's existing version, or adopt the old 0.1.0 install once. */
+/** Pick the data directory's existing version, or adopt a compatible install once. */
 export async function selectInstalled(config) {
   return withSwitchLock(async () => {
     const active = await json(path('active.json'));
@@ -92,9 +92,11 @@ export async function selectInstalled(config) {
       apply(config, active);
       return config.packageRoot;
     }
-    if (!await validPackage(config.packageRoot, VERSION)) return undefined;
-    if ((await liveLeases()).some(lease => lease.version !== VERSION)) throw new Error('Another Cutaste version is running in this data directory. Finish it before selecting the plugin runtime.');
-    const record = { version: VERSION, packageRoot: config.packageRoot, compatibility: COMPATIBILITY, activatedAt: new Date().toISOString(), ...updater(config) };
+    const pkg = await metadata(config.packageRoot);
+    const candidate = { version: pkg?.version, packageRoot: config.packageRoot };
+    if (!await acceptable(candidate)) return undefined;
+    if ((await liveLeases()).some(lease => lease.version !== candidate.version)) throw new Error('Another Cutaste version is running in this data directory. Finish it before selecting the plugin runtime.');
+    const record = { ...candidate, compatibility: COMPATIBILITY, activatedAt: new Date().toISOString(), ...updater(config) };
     await atomicJson(path('active.json'), record);
     return apply(config, record);
   });
@@ -141,7 +143,7 @@ export async function daemonMatches(config) {
   const state = await json(join(dataHome(), 'state', 'web.json')).catch(() => undefined);
   if (!state || !alive(state.pid) || !Number.isInteger(state.port) || state.port < 1 || state.port > 65535 || typeof state.control !== 'string') return false;
   const result = await control(state, '/_ctl/ping', {}).catch(() => undefined);
-  const version = result?.body?.version ?? state.runtimeVersion ?? (config.version === VERSION ? VERSION : undefined);
+  const version = result?.body?.version ?? state.runtimeVersion ?? (config.version === LEGACY_VERSION ? LEGACY_VERSION : undefined);
   return result?.status === 200 && result.body?.ok === true && result.body?.pid === state.pid && version === config.version;
 }
 async function stopIdleDaemon(candidate) {
@@ -239,12 +241,14 @@ async function queryLatest() {
   });
 }
 
-async function verifyCandidate(config, packageRoot, version) {
+export async function verifyCandidate(config, packageRoot, version) {
+  if (!await acceptable({ version, packageRoot }) || !compatible((await metadata(packageRoot)).cutasteUpdate)) throw new Error('The runtime candidate has an incompatible package contract.');
   // npm verifies the registry tarball integrity. Also verify the packaged file
   // manifest when provided, then boot both host entry points in a throwaway home.
   const manifest = await json(join(packageRoot, 'release-manifest.json'));
   if (manifest) {
     if (manifest.version !== version || !compatible(manifest.cutasteUpdate) || !Array.isArray(manifest.files)) throw new Error('The package release manifest is incompatible.');
+    if (manifest.platform === 'universal' && (!Array.isArray(manifest.supportedPlatforms) || !manifest.supportedPlatforms.includes(`${process.platform}-${process.arch}`))) throw new Error('The package release manifest does not support this platform.');
     for (const item of manifest.files) {
       if (typeof item.path !== 'string' || item.path.startsWith('/') || item.path.includes('\\') || item.path.split('/').some(part => !part || part === '..' || part === '.')) throw new Error('Unsafe package manifest path.');
       const file = join(packageRoot, item.path);
@@ -317,6 +321,9 @@ export async function checkForUpdates(config) {
     }
     if (!compatible(latest.cutasteUpdate)) {
       await setCheck({ status: 'incompatible', latestVersion: latest.version, message: 'This release needs a compatible plugin or data migration; the installed version remains selected.' }); return;
+    }
+    if (!packageMatchesPlatform(latest)) {
+      await setCheck({ status: 'incompatible', latestVersion: latest.version, message: `This release does not declare support for ${process.platform}-${process.arch}; the installed version remains selected.` }); return;
     }
     const destination = join(config.prefix, 'versions', latest.version);
     const candidate = { version: latest.version, packageRoot: join(destination, 'node_modules', 'cutaste'), compatibility: COMPATIBILITY };

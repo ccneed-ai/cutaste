@@ -4,8 +4,11 @@ import { access, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const markerPath = home => join(home, 'state', 'plugin-first-page.json');
-export function hasDesktop(env) {
+export function hasDesktop(env, platform = process.platform) {
   if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY || env.CI) return false;
+  // Native macOS sessions do not need X11 DISPLAY variables. Opening remains
+  // best-effort, and remote/CI sessions are excluded above on every platform.
+  if (platform === 'darwin') return true;
   // Linux desktop/WSLg, or a Windows browser reachable through WSL's launcher.
   return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY || (env.WSL_DISTRO_NAME && env.WSL_INTEROP));
 }

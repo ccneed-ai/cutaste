@@ -36,7 +36,8 @@ if (registry.delay) await new Promise(resolve => setTimeout(resolve,registry.del
 if (args.includes('view') || args.includes('info')) {
   if (registry.offline) { process.stderr.write('registry unavailable'); process.exit(1); }
   const entry = registry.packages[registry.latest];
-  const metadata = {name:'cutaste',version:registry.latest,cutasteUpdate:entry?.compatibility};
+  const installed = entry ? JSON.parse(await readFile(join(entry.path,'package.json'),'utf8')) : {};
+  const metadata = {name:'cutaste',version:registry.latest,cutasteUpdate:entry?.compatibility,os:installed.os,cpu:installed.cpu,supportedPlatforms:installed.supportedPlatforms};
   if(args.includes('version') && !args.includes('cutasteUpdate')) process.stdout.write(JSON.stringify(registry.latest));
   else if(args.includes('cutasteUpdate') && !args.includes('version')) process.stdout.write(JSON.stringify(entry?.compatibility));
   else process.stdout.write(JSON.stringify(metadata));
@@ -126,17 +127,18 @@ if(args[0]==='setup') {
 `;
 }
 
-async function writePackage(path, version, compatibility = COMPATIBILITY, { broken = false } = {}) {
+async function writePackage(path, version, compatibility = COMPATIBILITY, { broken = false, universal = false } = {}) {
   await mkdir(path, { recursive: true });
-  await writeFile(join(path, 'package.json'), JSON.stringify({ name: 'cutaste', version, ...(compatibility ? { cutasteUpdate: compatibility } : {}) }));
+  const supportedPlatforms=['linux-x64','darwin-arm64','darwin-x64'];
+  await writeFile(join(path, 'package.json'), JSON.stringify({ name: 'cutaste', version, os:universal?['linux','darwin']:['linux'], cpu:universal?['x64','arm64']:['x64'], ...(universal?{supportedPlatforms}:{}), ...(compatibility ? { cutasteUpdate: compatibility } : {}) }));
   await mkdir(join(path, 'bin'), { recursive: true });
   await writeFile(join(path, 'bin/cutaste.mjs'), '// Fixture core entry point\n');
   for (const host of ['codex', 'claude-code']) {
     const plugin = join(path, 'plugins', host, 'cutaste');
-    const manifest = JSON.stringify({ runtimeKind: 'local-node', platform: 'linux', arch: 'x64', requiresPreinstalledNode: true, nodeBundled: false, channel: 'stable' });
+    const manifest = JSON.stringify({ runtimeKind: 'local-node', platform:universal?'universal':'linux', arch:universal?'universal':'x64', ...(universal?{supportedPlatforms}:{}), requiresPreinstalledNode: true, nodeBundled: false, channel: 'stable' });
     const files = {
       'payload/manifest.json': manifest,
-      'supported-platform.json': JSON.stringify({ coreManifestSha256: createHash('sha256').update(manifest).digest('hex') }),
+      'supported-platform.json': JSON.stringify({ host, supportedPlatform:universal?'universal':'linux-x64', ...(universal?{supportedPlatforms}:{}), coreManifestSha256: createHash('sha256').update(manifest).digest('hex') }),
       'scripts/launch.sh': '#!/bin/sh\nexec "$CUTASTE_NODE" "${0%/*}/fixture.mjs" "$@"\n',
       'scripts/fixture.mjs': coreFixture(version),
       'scripts/select-core.mjs': '', 'prepare-offline.mjs': '', 'payload/runtime/cutaste.mjs': '',
@@ -172,7 +174,7 @@ async function fixture(t, options = {}) {
   }
   await candidate(OLD, null);
   await candidate(NEXT, options.compatibility || COMPATIBILITY, options);
-  await cp(registry.packages[OLD].path, join(prefix, 'node_modules/cutaste'), { recursive: true });
+  if(!options.fresh) await cp(registry.packages[OLD].path, join(prefix, 'node_modules/cutaste'), { recursive: true });
   function start(args, extra = {}, host = 'codex') {
     const child = spawn(process.execPath, [launch, host, ...args], { env: { ...env, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] });
     children.add(child);
@@ -228,6 +230,33 @@ async function fixture(t, options = {}) {
   return { root, home, prefix, env, registry, candidate, setRegistry, start, run, prepare, check, current, calls, lines, bootstrap, daemon,
     active: () => readJson(join(home, 'state/runtime-updates/active.json')) };
 }
+
+test('fresh universal baseline initializes both hosts once without a hand-written active selection',async t=>{
+  const f=await fixture(t,{fresh:true,universal:true});
+  await f.bootstrap();
+  assert.equal((await f.active()).version,NEXT);
+  await f.prepare({CUTASTE_AUTO_UPDATE:'0'},'claude-code');
+  assert.equal(await f.current({CUTASTE_AUTO_UPDATE:'0'}),NEXT);
+  const installs=(await f.calls()).filter(call=>call.args.includes('install'));
+  assert.equal(installs.length,1);assert.ok(installs[0].args.includes(`cutaste@${NEXT}`));
+  assert.equal((await f.lines(join(f.home,'state/browser-opens.jsonl'))).length,1);
+  const setup=await readJson(join(f.home,'state/plugin-setup.json'));
+  assert.deepEqual(setup.hosts.sort(),['claude-code','codex']);
+});
+
+test('latest for another platform is rejected before downloading and leaves the active core unchanged',async t=>{
+  const f=await fixture(t);
+  await f.bootstrap();
+  const file=join(f.registry.packages[NEXT].path,'package.json');
+  const pkg=JSON.parse(await readFile(file,'utf8'));
+  await writeFile(file,JSON.stringify({...pkg,os:['darwin'],cpu:['arm64']}));
+  await f.check();
+  assert.equal((await f.active()).version,OLD);
+  assert.equal((await f.calls()).filter(call=>call.args.includes('install')).length,0);
+  const check=await readJson(join(f.home,'state/runtime-updates/check.json'));
+  assert.equal(check.status,'incompatible');
+  assert.match(check.message,/does not declare support for/);
+});
 
 test('latest is resolved once, installed by exact version, and used without reopening the page', async t => {
   const f = await fixture(t);

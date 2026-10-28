@@ -69,7 +69,7 @@ async function fixture(t) {
   async function config(host='codex', name='prefix') {
     const prefix=join(root,name), packageRoot=join(prefix,'node_modules/cutaste');
     await mkdir(packageRoot,{recursive:true});
-    await writeFile(join(packageRoot,'package.json'),JSON.stringify({name:'cutaste',version:'0.1.0'}));
+    await writeFile(join(packageRoot,'package.json'),JSON.stringify({name:'cutaste',version:'0.1.0',os:['linux'],cpu:['x64']}));
     await mkdir(join(packageRoot,'bin'),{recursive:true});
     await writeFile(join(packageRoot,'bin/cutaste.mjs'),'// fixture');
     for(const platform of ['codex','claude-code']) {
@@ -77,7 +77,7 @@ async function fixture(t) {
       const manifest=JSON.stringify({runtimeKind:'local-node',platform:'linux',arch:'x64',requiresPreinstalledNode:true,nodeBundled:false,channel:'stable'});
       const files={
         'payload/manifest.json':manifest,
-        'supported-platform.json':JSON.stringify({coreManifestSha256:createHash('sha256').update(manifest).digest('hex')}),
+        'supported-platform.json':JSON.stringify({host:platform,supportedPlatform:'linux-x64',coreManifestSha256:createHash('sha256').update(manifest).digest('hex')}),
         'scripts/launch.sh':'#!/bin/sh\nexec "$CUTASTE_NODE" "${0%/*}/fixture.mjs" "$@"\n',
         'scripts/fixture.mjs':fixtureCore,
         'scripts/select-core.mjs':'', 'prepare-offline.mjs':'', 'payload/runtime/cutaste.mjs':'',
@@ -98,12 +98,12 @@ async function fixture(t) {
 }
 
 test('desktop detection excludes SSH/CI/headless and permits desktop or WSL browser',()=>{
-  assert.equal(hasDesktop({}),false);
-  assert.equal(hasDesktop({BROWSER:'xdg-open'}),false);
-  assert.equal(hasDesktop({DISPLAY:':0'}),true);
-  assert.equal(hasDesktop({WAYLAND_DISPLAY:'wayland-0'}),true);
-  assert.equal(hasDesktop({WSL_DISTRO_NAME:'Ubuntu',WSL_INTEROP:'/run/WSL/1_interop'}),true);
-  for(const name of ['SSH_CONNECTION','SSH_CLIENT','SSH_TTY','CI'])assert.equal(hasDesktop({DISPLAY:':0',[name]:'yes'}),false);
+  assert.equal(hasDesktop({},'linux'),false);
+  assert.equal(hasDesktop({BROWSER:'xdg-open'},'linux'),false);
+  assert.equal(hasDesktop({DISPLAY:':0'},'linux'),true);
+  assert.equal(hasDesktop({WAYLAND_DISPLAY:'wayland-0'},'linux'),true);
+  assert.equal(hasDesktop({WSL_DISTRO_NAME:'Ubuntu',WSL_INTEROP:'/run/WSL/1_interop'},'linux'),true);
+  for(const name of ['SSH_CONNECTION','SSH_CLIENT','SSH_TTY','CI'])assert.equal(hasDesktop({DISPLAY:':0',[name]:'yes'},'linux'),false);
 });
 
 test('fresh install opens once, repeated starts and the other host never reopen',async t=>{

@@ -9,7 +9,7 @@ description: "查看 Cutaste 本地题库、偏好与工作状态，打开管理
 
 需要命令行回退时，从本 Skill 所在目录（`skills/<name>`）向上两级取得插件根目录；路径包含空格时必须引用。使用当前助手对应的入口：Codex 为 `"$PLUGIN_ROOT/scripts/launch.sh" codex <参数>`，Claude Code 为 `"${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh" claude-code <参数>`。若 shell 未提供根目录变量，换成刚取得的绝对路径。不要仅凭 `CLAUDE_PLUGIN_ROOT` 判断宿主，Codex 也可能设置兼容变量。
 
-下文的启动器参数都接在宿主名之后。MCP 与 Hook 已随本插件注册；启动器自动准备并复用固定版本的 npm CLI，无需另装引导、正式插件或全局 CLI。保留 `CUTASTE_INSTALL_DIR`、`CUTASTE_HOME` / `TASTE_HOME`、`CUTASTE_NODE`、`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`，不替用户改宿主配置。当前正式 npm 运行程序支持 Linux x64；其他平台尚未验收，不要声称已经支持。
+下文的启动器参数都接在宿主名之后。MCP 与 Hook 已随本插件注册；启动器自动准备确定版本的 npm CLI 基线，并管理兼容更新，无需另装引导、正式插件或全局 CLI。保留 `CUTASTE_INSTALL_DIR`、`CUTASTE_HOME` / `TASTE_HOME`、`CUTASTE_NODE`、`CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`，不替用户改宿主配置。当前已公开核心仍为 Linux x64；本地候选 0.1.1 通用包覆盖 Linux x64、macOS arm64/x64，插件会自行下载、核验和初始化，不需要用户手写 active 记录。候选尚未公开发行；必须以实际下载与本机验收结果为准，不用 --force 绕过平台检查。
 
 
 维护一套从模板起步、随用户上下文演进的本地题库。用户直接在编码对话里表达需求；它们进入证据和候选流程，不要求另建题库或调用记笔记命令。
